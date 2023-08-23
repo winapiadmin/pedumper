@@ -25,41 +25,41 @@ WORD ReadPELocation(HANDLE fileHandle)
 BOOL IsPEHeader(HANDLE fileHandle){
 	WORD PELocation=ReadPELocation(fileHandle);
 	CHAR data[4];
-    DWORD number;
-    if (PELocation==0) return 0;
-    // Move the file pointer to the offset [PELocation]
-    if (SetFilePointer(fileHandle, PELocation, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
-    {
-        // Handle error
-        return 0;
-    }
-    // Read 4 bytes from the file into data
-    if (!ReadFile(fileHandle, &data, 4, &number, NULL))
-    {
-        // Handle error
-        return 0;
-    }
-    SetFilePointer(fileHandle, 0x00, NULL, FILE_BEGIN);
-    if (data!="PE\0\0") return 0;
-    return 1;
+	   DWORD number;
+	if (PELocation==0) return 0;
+	// Move the file pointer to the offset [PELocation]
+	if (SetFilePointer(fileHandle, PELocation, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
+	{
+	    // Handle error
+	    return 0;
+	}
+	// Read 4 bytes from the file into data
+	if (!ReadFile(fileHandle, &data, 4, &number, NULL))
+	{
+	    // Handle error
+	    return 0;
+	}
+	SetFilePointer(fileHandle, 0x00, NULL, FILE_BEGIN);
+	if (data!="PE\0\0") return 0;
+	return 1;
 }
 
 BOOL ReadMachine(HANDLE fileHandle){
 	WORD PELocation=ReadPELocation(fileHandle);
 	WORD data;
-    DWORD number;
-    if (PELocation==0) return 0;
+	DWORD number;
+	if (PELocation==0) return 0;
 	if (IsPEHeader(fileHandle)==1){
 		if (SetFilePointer(fileHandle, PELocation+0x4, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
 	    {
-	        // Handle error
-	        return 0;
+		// Handle error
+		return 0;
 	    }
 	    // Read 2 bytes from the file into data
 	    if (!ReadFile(fileHandle, &data, 2, &number, NULL))
 	    {
-	        // Handle error
-	        return 0;
+		// Handle error
+		return 0;
 	    }
 	    data = ((data & 0x00FF) << 8) | ((data & 0xFF00) >> 8);
 	    return data;
@@ -69,22 +69,22 @@ BOOL ReadMachine(HANDLE fileHandle){
 DWORD CodeSize(HANDLE fileHandle){
 	WORD PELocation=ReadPELocation(fileHandle);
 	DWORD data;
-    DWORD number;
-    if (PELocation==0) return 0;
+	DWORD number;
+	if (PELocation==0) return 0;
 	if (IsPEHeader(fileHandle)==1){
 		if (SetFilePointer(fileHandle, PELocation+0x1C, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
-	    {
-	        // Handle error
-	        return 0;
-	    }
-	    // Read 4 bytes from the file into data
-	    if (!ReadFile(fileHandle, &data, 4, &number, NULL))
-	    {
-	        // Handle error
-	        return 0;
-	    }
-	    data = ((data & 0x0000FF) << 8) |((data & 0x00FF00) << 8) | ((data & 0xFF0000) >> 8);
-	    return data;
+	    	{
+			// Handle error
+			return 0;
+	    	}
+		// Read 4 bytes from the file into data
+		if (!ReadFile(fileHandle, &data, 4, &number, NULL))
+		{
+			// Handle error
+			return 0;
+		}
+		data = ((data & 0x0000FF) << 8) |((data & 0x00FF00) << 8) | ((data & 0xFF0000) >> 8);
+		return data;
 	}
 }
 
@@ -131,7 +131,6 @@ PIMAGE_NT_HEADERS ReadPEHeader(HANDLE fileHandle){
 	}
 }
 PIMAGE_DOS_HEADER ReadDOSHeader(HANDLE fileHandle){
-	// BEGIN
 	if (SetFilePointer(fileHandle, 0x0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
 	{
 		// Handle error
