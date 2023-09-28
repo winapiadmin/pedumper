@@ -9,3 +9,4 @@ DWORD EntryPointAddress(HANDLE fileHandle);
 
 PIMAGE_NT_HEADERS ReadPEHeader(HANDLE);
 PIMAGE_DOS_HEADER ReadDOSHeader(HANDLE);
+VOID DumpDebugDirectory(PVOID FileBuffer, PIMAGE_NT_HEADERS NtHeaders);
