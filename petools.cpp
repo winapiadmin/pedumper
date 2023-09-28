@@ -146,3 +146,51 @@ PIMAGE_DOS_HEADER ReadDOSHeader(HANDLE fileHandle){
 	}
 	return data;
 }
+// https://stackoverflow.com/questions/77032798/strange-entry-type-4194304-while-reading-debug-directory (my question about debug directory)
+VOID DumpDebugDirectory(PVOID FileBuffer, PIMAGE_NT_HEADERS NtHeaders)
+{
+    // get the data directory, which is at a different location for 32-bit and 64-bit executables
+    PIMAGE_DATA_DIRECTORY DataDirectory = NULL;
+
+    switch (NtHeaders->OptionalHeader.Magic)
+    {
+    case IMAGE_NT_OPTIONAL_HDR32_MAGIC:
+        DataDirectory = ((PIMAGE_NT_HEADERS32)NtHeaders)->OptionalHeader.DataDirectory;
+        break;
+    case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
+        DataDirectory = ((PIMAGE_NT_HEADERS64)NtHeaders)->OptionalHeader.DataDirectory;
+        break;
+    }
+
+    if (DataDirectory)
+    {
+        // get the debug directory entry
+        PIMAGE_DATA_DIRECTORY DebugDirectoryEntry = &DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+        if (DebugDirectoryEntry->VirtualAddress)
+        {
+            // directory entry contains data; locate the section it resides in
+            PIMAGE_SECTION_HEADER DebugSectionHeader = NULL;
+
+            PIMAGE_SECTION_HEADER SectionHeaders = IMAGE_FIRST_SECTION(NtHeaders);
+            for (WORD SectionIndex = 0; SectionIndex < NtHeaders->FileHeader.NumberOfSections; SectionIndex++)
+            {
+                PIMAGE_SECTION_HEADER SectionHeader = &SectionHeaders[SectionIndex];
+                if ((DebugDirectoryEntry->VirtualAddress >= SectionHeader->VirtualAddress) && (DebugDirectoryEntry->VirtualAddress < (SectionHeader->VirtualAddress + SectionHeader->Misc.VirtualSize)))
+                {
+                    DebugSectionHeader = SectionHeader;
+                    break;
+                }
+            }
+
+            if (DebugSectionHeader)
+            {
+                // found the section; determine the relative offset and get the data
+                PVOID SectionData = (PVOID)((ULONG_PTR)FileBuffer + DebugSectionHeader->PointerToRawData);
+                DWORD RelativeOffset = (DebugDirectoryEntry->VirtualAddress - DebugSectionHeader->VirtualAddress);
+                PIMAGE_DEBUG_DIRECTORY DebugDirectory = (PIMAGE_DEBUG_DIRECTORY)((ULONG_PTR)SectionData + RelativeOffset);
+                // dump the data
+                printf("DebugDirectory.Type: %u\n", DebugDirectory->Type);
+            }
+        }
+    }
+}
