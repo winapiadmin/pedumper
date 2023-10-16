@@ -1,6 +1,6 @@
 #include <windows.h>
 #include <string>
-
+#include <dbghelp.h>
 WORD ReadPELocation(HANDLE);
 BOOL IsPEHeader(HANDLE);
 BOOL ReadMachine(HANDLE fileHandle);
