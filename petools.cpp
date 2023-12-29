@@ -5,15 +5,7 @@ WORD ReadPELocation(HANDLE fileHandle){
 }
 
 BOOL IsPEHeader(HANDLE fileHandle){
-	return (ReadPEHeader(fileHandle)->Signature==0x00004550);
-}
-
-BOOL ReadMachine(HANDLE fileHandle){
-	return ReadPEHeader(fileHandle)->FileHeader.Machine;
-}
-
-DWORD CodeSize(HANDLE fileHandle){
-	return ReadPEHeader(fileHandle)->OptionalHeader.CodeSize;
+	return (ReadPEHeader(fileHandle)->Signature==IMAGE_NT_SIGNATURE);
 }
 
 DWORD EntryPointAddress(HANDLE fileHandle){
@@ -37,6 +29,7 @@ PIMAGE_NT_HEADERS ReadPEHeader(HANDLE fileHandle){
 	}
 	return data;
 }
+
 PIMAGE_DOS_HEADER ReadDOSHeader(HANDLE fileHandle){
 	if (SetFilePointer(fileHandle, 0x0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
 	{
