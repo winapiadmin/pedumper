@@ -1,58 +1,11 @@
-#include <windows.h>
-#include <dbghelp.h>
-#include <vector>
-#include "PDBFile.h"
-#include <iostream>
-#include "Debug.h"
-#include "capstone/capstone.h"
-#include <unordered_map>
-#include <stdlib.h>
+#include "types.h"
+#include "disasm_analyzer.h"
+#include <inttypes.h>
 using namespace std;
-// safe-fail implementation for assert
-#define FAIL(s,...) printf("\tERROR: %s\n",s);return 1
-#define WARN(s,...) printf("\tWARNING: %s\n",s)
-#define RtlOffsetToPointer(B,O)  ((ULONG_PTR)( ((ULONG_PTR)(B)) + ((ULONG_PTR)(O))  ))
-#define RtlPointerToOffset(B,O)  ((ULONG_PTR)( ((ULONG_PTR)(B)) - ((ULONG_PTR)(O))  ))
-#define DbgPrint printf
-HANDLE hFile,hMapping;
-HMODULE hmod;
-BOOL CALLBACK ENUMRESPROCCALLBACK(	HMODULE hMod,
-                                    LPCSTR lpType,
-                                    LPSTR lpName,
-                                    LONG_PTR lParam
-                                 )
-{
-    HRSRC hResource=FindResource(hMod,lpName,lpType);
-    printf("\t%02lX\t\tSize\n", SizeofResource(hMod,hResource));
-    return TRUE;
-}
 
-
-bool has_rip_relative_addressing(cs_insn *insn, csh handle)
-{
-    for (size_t i = 0; i < insn->detail->x86.op_count; i++)
-    {
-        cs_x86_op *op = &(insn->detail->x86.operands[i]);
-        if (op->type == X86_OP_MEM && op->mem.base == X86_REG_RIP)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-long long parse_rip_relative_addressing(cs_insn *insn, csh handle)
-{
-    for (size_t i = 0; i < insn->detail->x86.op_count; i++)
-    {
-        cs_x86_op *op = &(insn->detail->x86.operands[i]);
-        if (op->type == X86_OP_MEM && op->mem.base == X86_REG_RIP)
-        {
-            return op->mem.disp;
-        }
-    }
-    return 0;
-}
+LPVOID lpBaseAddress=NULL;
+HANDLE hMapping=NULL;
+#ifdef _WIN32
 WINBOOL WINAPI Handler(DWORD)
 {
     if (hFile)
@@ -61,104 +14,105 @@ WINBOOL WINAPI Handler(DWORD)
     if (hmod)
         FreeLibrary(hmod);
     return TRUE;
-}/*
-typedef _IMAGE_SYMBOL COFF_Symbol;
-// Function to read the symbol name
-void readSymbolName(COFF_Symbol *symbol, char *name) {
-    // Name is in the e_name field
-    strncpy(name, symbol->N.ShortName, 8);
 }
-
-// Function to parse the COFF symbol table
-void parseSymbolTable(COFF_Symbol *symbolTable, int numSymbols) {
-    for (int i = 0; i < numSymbols; i++) {
-        COFF_Symbol *symbol = &symbolTable[i];
-        char name[256];
-
-        // Read the symbol name
-        readSymbolName(symbol, name);
-
-        // Print the primary symbol information
-        printf("\tSymbol                         %d\n", i);
-        printf("\t\tName                         %s\n", name);
-        printf("\t\tValue                        0x%08lX\n", symbol->Value);
-        printf("\t\tSection Number               %d\n", symbol->SectionNumber);
-        printf("\t\tType                         0x%04X\n", symbol->Type);
-        switch(symbol->Type&0xFF){
-        case IMAGE_SYM_TYPE_NULL:printf("\t\t\tUnknown");break;
-        case IMAGE_SYM_TYPE_VOID:printf("\t\t\tvoid");break;
-        case IMAGE_SYM_TYPE_CHAR:printf("\t\t\tsigned char");break;
-        case IMAGE_SYM_TYPE_SHORT:printf("\t\t\tsigned short");break;
-        case IMAGE_SYM_TYPE_INT:printf("\t\t\tsigned int");break;
-        case IMAGE_SYM_TYPE_LONG:printf("\t\t\tsigned long");break;
-        case IMAGE_SYM_TYPE_FLOAT:printf("\t\t\tfloat");break;
-        case IMAGE_SYM_TYPE_DOUBLE:printf("\t\t\tdouble");break;
-        case IMAGE_SYM_TYPE_STRUCT:printf("\t\t\tstruct");break;
-        case IMAGE_SYM_TYPE_UNION:printf("\t\t\tunion");break;
-        case IMAGE_SYM_TYPE_ENUM:printf("\t\t\tenum");break;
-        case IMAGE_SYM_TYPE_MOE:break;
-        case IMAGE_SYM_TYPE_BYTE:printf("\t\t\tunsigned char");break;
-        case IMAGE_SYM_TYPE_WORD:printf("\t\t\tunsigned short");break;
-        case IMAGE_SYM_TYPE_UINT:printf("\t\t\tunsigned int");break;
-        case IMAGE_SYM_TYPE_DWORD:printf("\t\t\tunsigned long");break;
-        }
-        switch(symbol->Type&0xFF00){
-            case IMAGE_SYM_DTYPE_POINTER:printf("*\n");break;
-            case IMAGE_SYM_DTYPE_FUNCTION:printf("();\n");break;
-            case IMAGE_SYM_DTYPE_ARRAY:printf("[]={};\n");break;
-            default:printf("\n");break;
-        }
-        printf("\t\tStorage Class                0x%02X\n", symbol->StorageClass);
-        printf("\t\tNumber of Auxiliary Symbols  %d\n", symbol->NumberOfAuxSymbols);
-
-        // Skip the auxiliary symbols
-        i += symbol->NumberOfAuxSymbols;
+#else
+#include <csignal>
+#include "altimpl.h"
+extern std::unordered_map<DWORD, DWORD> mappingTable;  // Access the mapping table
+#include "utils.h"
+// Include additional files
+#include "PDBFile.h"
+#include "Debug.h"
+void SignalHandler(int signal) {
+    if (signal == SIGINT) {
+        std::cout << "CTRL+C received, exiting...\n";
+        exit(0);
     }
 }
-    printf("------ SYMBOLS ------");
-    parseSymbolTable((DWORD_PTR)lpBaseAddress+pFileHeader->PointerToSymbolTable, pFileHeader->NumberOfSymbols);
-*/
-int main(int argc, char* argv[])
+#endif
+BOOL CALLBACK ENUMRESPROCCALLBACK(	HMODULE hMod,
+                                    LPCSTR lpType,
+                                    LPSTR lpName,
+                                    LONG_PTR lParam
+                                 )
 {
+    HRSRC hResource=FindResource(hMod,lpName,lpType);
+    printf("\tID\t\t%s\n", lpName);
+    printf("\t%02" PRIx16 "\t\tSize\n", SizeofResource(hMod,hResource));
+    return TRUE;
+}
+int main(int argc, char* argv[]) {
     if (argc==1)
     {
         printf("pedump filename\n");
         printf("By default it will dump all information");
         return 1;
     }
-    SetConsoleCtrlHandler((PHANDLER_ROUTINE)Handler,TRUE);
-    // Open the executable file you want to load
-    hFile=CreateFile(argv[1], GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE)
-    {
-        FAIL("Failed to open file");
-        // Handle error
-        return 1;
+    // Set up platform-specific signal handlers
+    #ifdef _WIN32
+    if (!SetConsoleCtrlHandler((PHANDLER_ROUTINE)Handler, TRUE)){
+        FAIL(D_EH,ERROR_HANDLER);
     }
+    #else
+    struct sigaction sa;
+    sa.sa_handler = SignalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGINT, &sa, nullptr) == -1){
+		FAIL(D_EH,ERROR_HANDLER);
+	}
+    #endif
+    //Load file (Windows: map it)
+	#ifdef _WIN32
+    	// Open the executable file you want to load
+    	HANDLE hFile=CreateFile(argv[1], GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    	if (hFile == INVALID_HANDLE_VALUE)
+    	{
+        	FAIL(D_F,ERROR_FILE);
+    	}
 
-    // Create a file mapping object that represents the executable file
-    hMapping = CreateFileMapping(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-    if (hMapping == NULL)
-    {
-        CloseHandle(hFile);
-        FAIL("Failed to create file maping");
-        // Handle error
-        return 1;
-    }
+    	// Create a file mapping object that represents the executable file
+    	hMapping = CreateFileMapping(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+    	if (hMapping == NULL)
+    	{
+        	CloseHandle(hFile);
+        	FAIL(D_MP,ERROR_MAPPING);
+    	}
 
-    // Map a view of the file into your process's address space
-    LPVOID lpBaseAddress = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
-    if (lpBaseAddress == NULL)
-    {
-        // Handle error
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
-        FAIL("Failed to map view file");
-        return 1;
-    }
-    PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)lpBaseAddress;
-    PIMAGE_OS2_HEADER pOS2Header = (PIMAGE_OS2_HEADER)lpBaseAddress;
-    PIMAGE_VXD_HEADER pVXDHeader = (PIMAGE_VXD_HEADER)lpBaseAddress;
+    	// Map a view of the file into your process's address space
+    	lpBaseAddress = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
+    	if (lpBaseAddress == NULL)
+    	{
+        	// Handle error
+        	CloseHandle(hMapping);
+        	CloseHandle(hFile);
+        	FAIL(D_V,ERROR_VIEW);
+    	}
+    #else
+        // Open the file
+    	int fd = open(argv[1], O_RDONLY);
+    	if (fd == -1) {
+        	FAIL(D_F,ERROR_FILE);
+    	}
+
+    	// Get the size of the file
+    	struct stat sb;
+    	if (fstat(fd, &sb) == -1) {
+        	close(fd);
+        	FAIL(D_MP,ERROR_MAPPING);
+    	}
+
+    	// Map the file into memory
+    	lpBaseAddress = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    	if (lpBaseAddress == MAP_FAILED) {
+        	close(fd);
+        	FAIL(D_MP,ERROR_MAPPING);
+    	}
+    #endif
+
+    PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)((DWORD_PTR)lpBaseAddress);
+    PIMAGE_OS2_HEADER pOS2Header = (PIMAGE_OS2_HEADER)((DWORD_PTR)lpBaseAddress);
+    PIMAGE_VXD_HEADER pVXDHeader = (PIMAGE_VXD_HEADER)((DWORD_PTR)lpBaseAddress);
     PIMAGE_NT_HEADERS32 pNtHeaders32 = (PIMAGE_NT_HEADERS32)((DWORD_PTR)lpBaseAddress + pDosHeader->e_lfanew);
     PIMAGE_FILE_HEADER pFileHeader = (PIMAGE_FILE_HEADER)((DWORD_PTR)pNtHeaders32+sizeof(DWORD)); //extra Signature
     PIMAGE_NT_HEADERS64 pNtHeaders64 = (PIMAGE_NT_HEADERS64)((DWORD_PTR)lpBaseAddress + pDosHeader->e_lfanew);
@@ -166,120 +120,116 @@ int main(int argc, char* argv[])
     {
     case IMAGE_DOS_SIGNATURE:
         printf("------ DOS HEADER ------\n");
-        printf("\tMagic number               0x%X\n", pDosHeader->e_magic);
-        printf("\tBytes on last page         0x%X\n", pDosHeader->e_cblp);
-        printf("\tPages on file              0x%X\n", pDosHeader->e_cp);
-        printf("\tRelocations                0x%X\n", pDosHeader->e_crlc);
-        printf("\tSize of header             0x%X\n", pDosHeader->e_cparhdr);
-        printf("\tMinimum extra paragraphs   0x%X\n", pDosHeader->e_minalloc);
-        printf("\te_maxalloc                 0x%X\n", pDosHeader->e_maxalloc);
-        printf("\tIntial (relative) SS value 0x%X\n", pDosHeader->e_ss);
-        printf("\tIntial SP value            0x%X\n", pDosHeader->e_sp);
-        printf("\tChecksum                   0x%X\n", pDosHeader->e_csum);
-        printf("\tIntial IP value            0x%X\n", pDosHeader->e_ip);
-        printf("\tIntial (relative) CS value 0x%X\n", pDosHeader->e_cs);
-        printf("\tRelocation table address   0x%X\n", pDosHeader->e_lfarlc);
-        printf("\tOverlay number             0x%X\n", pDosHeader->e_ovno);
-        printf("\tOEM ID                     0x%X\n", pDosHeader->e_oemid);
-        printf("\tOEM information            0x%X\n", pDosHeader->e_oeminfo);
-        printf("\tPointer to PE header       0x%lX\n", pDosHeader->e_lfanew);
+        printf("\tMagic number               0x%" PRIx16 "\n", pDosHeader->e_magic);
+        printf("\tBytes on last page         0x%" PRIx16 "\n", pDosHeader->e_cblp);
+        printf("\tPages on file              0x%" PRIx16 "\n", pDosHeader->e_cp);
+        printf("\tRelocations                0x%" PRIx16 "\n", pDosHeader->e_crlc);
+        printf("\tSize of header             0x%" PRIx16 "\n", pDosHeader->e_cparhdr);
+        printf("\tMinimum extra paragraphs   0x%" PRIx16 "\n", pDosHeader->e_minalloc);
+        printf("\te_maxalloc                 0x%" PRIx16 "\n", pDosHeader->e_maxalloc);
+        printf("\tIntial (relative) SS value 0x%" PRIx16 "\n", pDosHeader->e_ss);
+        printf("\tIntial SP value            0x%" PRIx16 "\n", pDosHeader->e_sp);
+        printf("\tChecksum                   0x%" PRIx16 "\n", pDosHeader->e_csum);
+        printf("\tIntial IP value            0x%" PRIx16 "\n", pDosHeader->e_ip);
+        printf("\tIntial (relative) CS value 0x%" PRIx16 "\n", pDosHeader->e_cs);
+        printf("\tRelocation table address   0x%" PRIx16 "\n", pDosHeader->e_lfarlc);
+        printf("\tOverlay number             0x%" PRIx16 "\n", pDosHeader->e_ovno);
+        printf("\tOEM ID                     0x%" PRIx16 "\n", pDosHeader->e_oemid);
+        printf("\tOEM information            0x%" PRIx16 "\n", pDosHeader->e_oeminfo);
+        printf("\tPointer to PE header       0x%" PRIX32 "\n", pDosHeader->e_lfanew);
         break;
     case IMAGE_OS2_SIGNATURE:
         printf("------ OS/2 HEADER ------\n");
-        printf("\tMagic number                      0x%X\n", pOS2Header->ne_magic);
-        printf("\tVersion                           0x%X\n", pOS2Header->ne_ver);
-        printf("\tReversion                         0x%X\n", pOS2Header->ne_rev);
-        printf("\tEntry table offset                0x%X\n", pOS2Header->ne_enttab);
-        printf("\tEntry table size                  0x%X\n", pOS2Header->ne_cbenttab);
-        printf("\tChecksum of file                  0x%04lX\n", pOS2Header->ne_crc);
-        printf("\tFlags                             0x%X\n", pOS2Header->ne_flags);
-        printf("\tAutomatic data segement number    0x%X\n", pOS2Header->ne_autodata);
-        printf("\tIntial heap allocation            0x%X\n", pOS2Header->ne_heap);
-        printf("\tIntial stack allocation           0x%X\n", pOS2Header->ne_stack);
-        printf("\tIntial CS:IP setting              0x%04lX\n", pOS2Header->ne_csip);
-        printf("\tIntial SS:SP setting              0x%04lX\n", pOS2Header->ne_sssp);
-        printf("\tCount of file segements           0x%X\n", pOS2Header->ne_cseg);
-        printf("\tEntries in Module Reference Table 0x%X\n", pOS2Header->ne_cmod);
-        printf("\tNon-resident name table size      0x%X\n", pOS2Header->ne_cbnrestab);
-        printf("\tSegement Table offset             0x%X\n", pOS2Header->ne_segtab);
-        printf("\tResource Table offset             0x%X\n", pOS2Header->ne_rsrctab);
-        printf("\tResident name table offset        0x%X\n", pOS2Header->ne_restab);
-        printf("\tModule Reference table offset     0x%X\n", pOS2Header->ne_modtab);
-        printf("\tImported names table offset       0x%X\n", pOS2Header->ne_imptab);
-        printf("\tNon-resident names table offset   0x%04lX\n", pOS2Header->ne_nrestab);
-        printf("\tMoveable entries count            0x%X\n", pOS2Header->ne_cmovent);
-        printf("\tSegement alignment shift count    0x%X\n", pOS2Header->ne_align);
-        printf("\tResource segements count          0x%X\n", pOS2Header->ne_cres);
-        printf("\tTarget OS                         0x%X\n", pOS2Header->ne_exetyp);
-        printf("\tOther .EXE flags                  0x%X\n", pOS2Header->ne_flagsothers);
-        printf("\tReturn thunks offset              0x%X\n", pOS2Header->ne_pretthunks);
-        printf("\tOffset to segement ref. bytes     0x%X\n", pOS2Header->ne_psegrefbytes);
-        printf("\tMinimum code swap area size       0x%X\n", pOS2Header->ne_swaparea);
-        printf("\tExpected Windows version number   0x%X\n", pOS2Header->ne_swaparea);
-        FAIL("No longer implemented");
+        printf("\tMagic number                      0x%" PRIx16 "\n", pOS2Header->ne_magic);
+        printf("\tVersion                           0x%" PRIx16 "\n", pOS2Header->ne_ver);
+        printf("\tReversion                         0x%" PRIx16 "\n", pOS2Header->ne_rev);
+        printf("\tEntry table offset                0x%" PRIx16 "\n", pOS2Header->ne_enttab);
+        printf("\tEntry table size                  0x%" PRIx16 "\n", pOS2Header->ne_cbenttab);
+        printf("\tChecksum of file                  0x%04" PRIX32 "\n", pOS2Header->ne_crc);
+        printf("\tFlags                             0x%" PRIx16 "\n", pOS2Header->ne_flags);
+        printf("\tAutomatic data segement number    0x%" PRIx16 "\n", pOS2Header->ne_autodata);
+        printf("\tIntial heap allocation            0x%" PRIx16 "\n", pOS2Header->ne_heap);
+        printf("\tIntial stack allocation           0x%" PRIx16 "\n", pOS2Header->ne_stack);
+        printf("\tIntial CS:IP setting              0x%04" PRIX32 "\n", pOS2Header->ne_csip);
+        printf("\tIntial SS:SP setting              0x%04" PRIX32 "\n", pOS2Header->ne_sssp);
+        printf("\tCount of file segements           0x%" PRIx16 "\n", pOS2Header->ne_cseg);
+        printf("\tEntries in Module Reference Table 0x%" PRIx16 "\n", pOS2Header->ne_cmod);
+        printf("\tNon-resident name table size      0x%" PRIx16 "\n", pOS2Header->ne_cbnrestab);
+        printf("\tSegement Table offset             0x%" PRIx16 "\n", pOS2Header->ne_segtab);
+        printf("\tResource Table offset             0x%" PRIx16 "\n", pOS2Header->ne_rsrctab);
+        printf("\tResident name table offset        0x%" PRIx16 "\n", pOS2Header->ne_restab);
+        printf("\tModule Reference table offset     0x%" PRIx16 "\n", pOS2Header->ne_modtab);
+        printf("\tImported names table offset       0x%" PRIx16 "\n", pOS2Header->ne_imptab);
+        printf("\tNon-resident names table offset   0x%04" PRIX32 "\n", pOS2Header->ne_nrestab);
+        printf("\tMoveable entries count            0x%" PRIx16 "\n", pOS2Header->ne_cmovent);
+        printf("\tSegement alignment shift count    0x%" PRIx16 "\n", pOS2Header->ne_align);
+        printf("\tResource segements count          0x%" PRIx16 "\n", pOS2Header->ne_cres);
+        printf("\tTarget OS                         0x%" PRIx16 "\n", pOS2Header->ne_exetyp);
+        printf("\tOther .EXE flags                  0x%" PRIx16 "\n", pOS2Header->ne_flagsothers);
+        printf("\tReturn thunks offset              0x%" PRIx16 "\n", pOS2Header->ne_pretthunks);
+        printf("\tOffset to segement ref. bytes     0x%" PRIx16 "\n", pOS2Header->ne_psegrefbytes);
+        printf("\tMinimum code swap area size       0x%" PRIx16 "\n", pOS2Header->ne_swaparea);
+        printf("\tExpected Windows version number   0x%" PRIx16 "\n", pOS2Header->ne_swaparea);
+        FAIL(D_NIMP,ERROR_NIMP);
         break;
     case IMAGE_VXD_SIGNATURE:
-        printf("\tMagic number                                                0x%X\n", pVXDHeader->e32_magic);
-        printf("\tThe byte ordering for the VXD                               0x%X\n", pVXDHeader->e32_border);
-        printf("\tThe word ordering for the VXD                               0x%X\n", pVXDHeader->e32_worder);
-        printf("\tThe EXE format level                                        0x%lX\n", pVXDHeader->e32_level);
-        printf("\tThe CPU type                                                0x%X\n", pVXDHeader->e32_cpu);
-        printf("\tThe OS type                                                 0x%X\n", pVXDHeader->e32_os);
-        printf("\tModule version                                              0x%lX\n", pVXDHeader->e32_ver);
-        printf("\tModule flags                                                0x%lX\n", pVXDHeader->e32_mflags);
-        printf("\tModule # pages                                              0x%lX\n", pVXDHeader->e32_mpages);
-        printf("\tObject # for instruction pointer                            0x%lX\n", pVXDHeader->e32_startobj);
-        printf("\tExtended instruction pointer                                0x%lX\n", pVXDHeader->e32_eip);
-        printf("\tObject # for stack pointer                                  0x%lX\n", pVXDHeader->e32_stackobj);
-        printf("\tExtended stack pointer                                      0x%lX\n", pVXDHeader->e32_esp);
-        printf("\tVXD page size                                               0x%lX\n", pVXDHeader->e32_pagesize);
-        printf("\tLast page size in VXD                                       0x%lX\n", pVXDHeader->e32_lastpagesize);
-        printf("\tFixup section size                                          0x%lX\n", pVXDHeader->e32_fixupsize);
-        printf("\tFixup section checksum                                      0x%lX\n", pVXDHeader->e32_fixupsum);
-        printf("\tLoader section size                                         0x%lX\n", pVXDHeader->e32_ldrsize);
-        printf("\tLoader section checksum                                     0x%lX\n", pVXDHeader->e32_ldrsum);
-        printf("\tObject table offset                                         0x%lX\n", pVXDHeader->e32_objtab);
-        printf("\tNumber of objects in module                                 0x%lX\n", pVXDHeader->e32_objcnt);
-        printf("\tObject page map offset                                      0x%lX\n", pVXDHeader->e32_objmap);
-        printf("\tObject iterated data map offset                             0x%lX\n", pVXDHeader->e32_itermap);
-        printf("\tOffset of Resource Table                                    0x%lX\n", pVXDHeader->e32_rsrctab);
-        printf("\tNumber of resource entries                                  0x%lX\n", pVXDHeader->e32_rsrccnt);
-        printf("\tOffset of resident name table                               0x%lX\n", pVXDHeader->e32_restab);
-        printf("\tOffset of Entry Table                                       0x%lX\n", pVXDHeader->e32_enttab);
-        printf("\tOffset of Module Directive Table                            0x%lX\n", pVXDHeader->e32_dirtab);
-        printf("\tNumber of module directives                                 0x%lX\n", pVXDHeader->e32_dircnt);
-        printf("\tOffset of Fixup Page Table                                  0x%lX\n", pVXDHeader->e32_fpagetab);
-        printf("\tOffset of Fixup Record Table                                0x%lX\n", pVXDHeader->e32_frectab);
-        printf("\tOffset of Import Module Name Table                          0x%lX\n", pVXDHeader->e32_impmod);
-        printf("\tNumber of entries in Import Module Name Table               0x%lX\n", pVXDHeader->e32_impmodcnt);
-        printf("\tOffset of Import Procedure Name Table                       0x%lX\n", pVXDHeader->e32_impproc);
-        printf("\tOffset of Per-Page Checksum Table                           0x%lX\n", pVXDHeader->e32_pagesum);
-        printf("\tOffset of Enumerated Data Pages                             0x%lX\n", pVXDHeader->e32_datapage);
-        printf("\tNumber of preload pages                                     0x%lX\n", pVXDHeader->e32_preload);
-        printf("\tOffset of Non-resident Names Table                          0x%lX\n", pVXDHeader->e32_nrestab);
-        printf("\tSize of Non-resident Name Table                             0x%lX\n", pVXDHeader->e32_cbnrestab);
-        printf("\tNon-resident Name Table Checksum                            0x%lX\n", pVXDHeader->e32_nressum);
-        printf("\tObject # for automatic data object                          0x%lX\n", pVXDHeader->e32_autodata);
-        printf("\tOffset of the debugging information                         0x%lX\n", pVXDHeader->e32_debuginfo);
-        printf("\tThe length of the debugging info in bytes                   0x%lX\n", pVXDHeader->e32_debuglen);
-        printf("\tNumber of instance pages in preload section of VXD file     0x%lX\n", pVXDHeader->e32_instpreload);
-        printf("\tNumber of instance pages in demand load section of VXD file 0x%lX\n", pVXDHeader->e32_instdemand);
-        printf("\tSize of heap - for 16-bit apps                              0x%lX\n", pVXDHeader->e32_heapsize);
-        printf("\tDevice ID for VxD                                           0x%X\n", pVXDHeader->e32_devid);
-        printf("\tDDK version for VxD                                         0x%X\n", pVXDHeader->e32_ddkver);
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
-        FAIL("No longer implemented");
+        printf("\tMagic number                                                0x%" PRIx16 "\n", pVXDHeader->e32_magic);
+        printf("\tThe byte ordering for the VXD                               0x%" PRIx16 "\n", pVXDHeader->e32_border);
+        printf("\tThe word ordering for the VXD                               0x%" PRIx16 "\n", pVXDHeader->e32_worder);
+        printf("\tThe EXE format level                                        0x%" PRIx16 "\n", pVXDHeader->e32_level);
+        printf("\tThe CPU type                                                0x%" PRIx16 "\n", pVXDHeader->e32_cpu);
+        printf("\tThe OS type                                                 0x%" PRIx16 "\n", pVXDHeader->e32_os);
+        printf("\tModule version                                              0x%" PRIx16 "\n", pVXDHeader->e32_ver);
+        printf("\tModule flags                                                0x%" PRIx16 "\n", pVXDHeader->e32_mflags);
+        printf("\tModule # pages                                              0x%" PRIx16 "\n", pVXDHeader->e32_mpages);
+        printf("\tObject # for instruction pointer                            0x%" PRIx16 "\n", pVXDHeader->e32_startobj);
+        printf("\tExtended instruction pointer                                0x%" PRIx16 "\n", pVXDHeader->e32_eip);
+        printf("\tObject # for stack pointer                                  0x%" PRIx16 "\n", pVXDHeader->e32_stackobj);
+        printf("\tExtended stack pointer                                      0x%" PRIx16 "\n", pVXDHeader->e32_esp);
+        printf("\tVXD page size                                               0x%" PRIx16 "\n", pVXDHeader->e32_pagesize);
+        printf("\tLast page size in VXD                                       0x%" PRIx16 "\n", pVXDHeader->e32_lastpagesize);
+        printf("\tFixup section size                                          0x%" PRIx16 "\n", pVXDHeader->e32_fixupsize);
+        printf("\tFixup section checksum                                      0x%" PRIx16 "\n", pVXDHeader->e32_fixupsum);
+        printf("\tLoader section size                                         0x%" PRIx16 "\n", pVXDHeader->e32_ldrsize);
+        printf("\tLoader section checksum                                     0x%" PRIx16 "\n", pVXDHeader->e32_ldrsum);
+        printf("\tObject table offset                                         0x%" PRIx16 "\n", pVXDHeader->e32_objtab);
+        printf("\tNumber of objects in module                                 0x%" PRIx16 "\n", pVXDHeader->e32_objcnt);
+        printf("\tObject page map offset                                      0x%" PRIx16 "\n", pVXDHeader->e32_objmap);
+        printf("\tObject iterated data map offset                             0x%" PRIx16 "\n", pVXDHeader->e32_itermap);
+        printf("\tOffset of Resource Table                                    0x%" PRIx16 "\n", pVXDHeader->e32_rsrctab);
+        printf("\tNumber of resource entries                                  0x%" PRIx16 "\n", pVXDHeader->e32_rsrccnt);
+        printf("\tOffset of resident name table                               0x%" PRIx16 "\n", pVXDHeader->e32_restab);
+        printf("\tOffset of Entry Table                                       0x%" PRIx16 "\n", pVXDHeader->e32_enttab);
+        printf("\tOffset of Module Directive Table                            0x%" PRIx16 "\n", pVXDHeader->e32_dirtab);
+        printf("\tNumber of module directives                                 0x%" PRIx16 "\n", pVXDHeader->e32_dircnt);
+        printf("\tOffset of Fixup Page Table                                  0x%" PRIx16 "\n", pVXDHeader->e32_fpagetab);
+        printf("\tOffset of Fixup Record Table                                0x%" PRIx16 "\n", pVXDHeader->e32_frectab);
+        printf("\tOffset of Import Module Name Table                          0x%" PRIx16 "\n", pVXDHeader->e32_impmod);
+        printf("\tNumber of entries in Import Module Name Table               0x%" PRIx16 "\n", pVXDHeader->e32_impmodcnt);
+        printf("\tOffset of Import Procedure Name Table                       0x%" PRIx16 "\n", pVXDHeader->e32_impproc);
+        printf("\tOffset of Per-Page Checksum Table                           0x%" PRIx16 "\n", pVXDHeader->e32_pagesum);
+        printf("\tOffset of Enumerated Data Pages                             0x%" PRIx16 "\n", pVXDHeader->e32_datapage);
+        printf("\tNumber of preload pages                                     0x%" PRIx16 "\n", pVXDHeader->e32_preload);
+        printf("\tOffset of Non-resident Names Table                          0x%" PRIx16 "\n", pVXDHeader->e32_nrestab);
+        printf("\tSize of Non-resident Name Table                             0x%" PRIx16 "\n", pVXDHeader->e32_cbnrestab);
+        printf("\tNon-resident Name Table Checksum                            0x%" PRIx16 "\n", pVXDHeader->e32_nressum);
+        printf("\tObject # for automatic data object                          0x%" PRIx16 "\n", pVXDHeader->e32_autodata);
+        printf("\tOffset of the debugging information                         0x%" PRIx16 "\n", pVXDHeader->e32_debuginfo);
+        printf("\tThe length of the debugging info in bytes                   0x%" PRIx16 "\n", pVXDHeader->e32_debuglen);
+        printf("\tNumber of instance pages in preload section of VXD file     0x%" PRIx16 "\n", pVXDHeader->e32_instpreload);
+        printf("\tNumber of instance pages in demand load section of VXD file 0x%" PRIx16 "\n", pVXDHeader->e32_instdemand);
+        printf("\tSize of heap - for 16-bit apps                              0x%" PRIx16 "\n", pVXDHeader->e32_heapsize);
+        printf("\tDevice ID for VxD                                           0x%" PRIx16 "\n", pVXDHeader->e32_devid);
+        printf("\tDDK version for VxD                                         0x%" PRIx16 "\n", pVXDHeader->e32_ddkver);
+        FAIL(D_NIMP,ERROR_NIMP);
         break;
     default:
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
-        FAIL("Invalid DOS Header");
+        FAIL(D_DOS,ERROR_DOS);
         break;
     }
     printf("------ PE HEADER  ------\n");
-    printf("\tSignature            0x%lX\n",pNtHeaders32->Signature);
-    printf("\tMachine              0x%X\n\t",pFileHeader->Machine);
+    printf("\tSignature            0x%" PRIx16 "\n",pNtHeaders32->Signature);
+    printf("\tMachine              0x%" PRIx16 "\n\t",pFileHeader->Machine);
     switch(pFileHeader->Machine)
     {
     case IMAGE_FILE_MACHINE_I386:
@@ -316,10 +266,7 @@ int main(int argc, char* argv[])
         printf("\tHitachi SH5\n");
         break;
     case IMAGE_FILE_MACHINE_ARM:
-        printf("\tARM little endian\n");
-        break;
-    case IMAGE_FILE_MACHINE_ARMV7:
-        printf("\tARMv7\n");
+        printf("\tARM little endian/ARMv7\n");
         break;
     case IMAGE_FILE_MACHINE_ARM64:
         printf("\tARM64 little endian\n");
@@ -370,14 +317,12 @@ int main(int argc, char* argv[])
         printf("\tCEE\n");
         break;
     default:
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
-        FAIL("Unknown machine");
+        FAIL(D_MACHINE,ERROR_MACHINE);
     }
     printf("\tNumber of Sections   0x%X\n",pFileHeader->NumberOfSections);
-    printf("\tTime/Date Stamp      %li\n",pFileHeader->TimeDateStamp);
-    printf("\tPtr to symbol table  0x%lX\n",pFileHeader->PointerToSymbolTable);
-    printf("\tNumber of symbols    %li\n",pFileHeader->NumberOfSymbols);
+    printf("\tTime/Date Stamp      0x%X\n",pFileHeader->TimeDateStamp);
+    printf("\tPtr to symbol table  0x%X\n",pFileHeader->PointerToSymbolTable);
+    printf("\tNumber of symbols    %u\n",pFileHeader->NumberOfSymbols);
     printf("\tOptional Header size %i\n",pFileHeader->SizeOfOptionalHeader);
     printf("\tCharacteristics\n");
     if (pFileHeader->Characteristics&IMAGE_FILE_RELOCS_STRIPPED) printf("\t\tRelocs stripped\n");
@@ -409,16 +354,14 @@ int main(int argc, char* argv[])
         printf("\t\tROM\n");
         break;
     default:
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
-        FAIL("Not implemented - might be invalid");
+        FAIL(D_NIMP,ERROR_NIMP);
     }
-    printf("\tLinker version            %i.%i\n",pNtHeaders32->OptionalHeader.MajorLinkerVersion,pNtHeaders32->OptionalHeader.MinorLinkerVersion);
-    printf("\tCode size                 %li\n",pNtHeaders32->OptionalHeader.SizeOfCode);
-    printf("\tInitialized data size     %li\n",pNtHeaders32->OptionalHeader.SizeOfInitializedData);
-    printf("\tUninitialized data size   %li\n",pNtHeaders32->OptionalHeader.SizeOfUninitializedData);
-    printf("\tEntry point address       0x%08lX\n",pNtHeaders32->OptionalHeader.AddressOfEntryPoint);
-    printf("\tBase of code              0x%08lX\n",pNtHeaders32->OptionalHeader.BaseOfCode);
+    printf("\tLinker version            %u.%u\n",pNtHeaders32->OptionalHeader.MajorLinkerVersion,pNtHeaders32->OptionalHeader.MinorLinkerVersion);
+    printf("\tCode size                 %u\n",pNtHeaders32->OptionalHeader.SizeOfCode);
+    printf("\tInitialized data size     %u\n",pNtHeaders32->OptionalHeader.SizeOfInitializedData);
+    printf("\tUninitialized data size   %u\n",pNtHeaders32->OptionalHeader.SizeOfUninitializedData);
+    printf("\tEntry point address       0x%08" PRIX32 "\n",pNtHeaders32->OptionalHeader.AddressOfEntryPoint);
+    printf("\tBase of code              0x%08" PRIX32 "\n",pNtHeaders32->OptionalHeader.BaseOfCode);
     const vector<const char*> DataDirectoriesName= {"Export table","Import table","Resource table","Exception table","Certificate table","Base Relocation table","Debug","Architecture","Global Ptr","TLS table","Load Config table","Bound import","IAT","Delay Import Descriptor","CLR Runtime Header", "Reversed"};
     const char *subsystems[] =
     {
@@ -442,19 +385,19 @@ int main(int argc, char* argv[])
     switch(pNtHeaders32->OptionalHeader.Magic)
     {
     case 0x10B:
-        printf("\tBase of data              0x%08lX\n",pNtHeaders32->OptionalHeader.BaseOfData);
-        printf("\tImage Base                0x%08lX\n",pNtHeaders32->OptionalHeader.ImageBase);
-        printf("\tSection alignment         0x%08lX\n",pNtHeaders32->OptionalHeader.SectionAlignment);
-        printf("\tFile alignment            0x%08lX\n",pNtHeaders32->OptionalHeader.FileAlignment);
+        printf("\tBase of data              0x%08" PRIX32 "\n",pNtHeaders32->OptionalHeader.BaseOfData);
+        printf("\tImage Base                0x%08" PRIX32 "\n",pNtHeaders32->OptionalHeader.ImageBase);
+        printf("\tSection alignment         0x%08" PRIX32 "\n",pNtHeaders32->OptionalHeader.SectionAlignment);
+        printf("\tFile alignment            0x%08" PRIX32 "\n",pNtHeaders32->OptionalHeader.FileAlignment);
         printf("\tRequired OS Major Version %i\n",pNtHeaders32->OptionalHeader.MajorOperatingSystemVersion);
         printf("\tRequired OS Minor Version %i\n",pNtHeaders32->OptionalHeader.MinorOperatingSystemVersion);
         printf("\tImage Major Version       %i\n",pNtHeaders32->OptionalHeader.MajorImageVersion);
         printf("\tImage Minor Version       %i\n",pNtHeaders32->OptionalHeader.MinorImageVersion);
         printf("\tSubsystem Major Version   %i\n",pNtHeaders32->OptionalHeader.MajorSubsystemVersion);
         printf("\tSubsystem Minor Version   %i\n",pNtHeaders32->OptionalHeader.MajorSubsystemVersion);
-        printf("\tSize Of Image             %li\n",pNtHeaders32->OptionalHeader.SizeOfImage);
-        printf("\tSize Of Headers           %li\n",pNtHeaders32->OptionalHeader.SizeOfHeaders);
-        printf("\tChecksum                  0x%08lX\n",pNtHeaders32->OptionalHeader.CheckSum);
+        printf("\tSize Of Image             %u\n",pNtHeaders32->OptionalHeader.SizeOfImage);
+        printf("\tSize Of Headers           %u\n",pNtHeaders32->OptionalHeader.SizeOfHeaders);
+        printf("\tChecksum                  0x%08" PRIX32 "\n",pNtHeaders32->OptionalHeader.CheckSum);
         printf("\tSubsystem\n");
         printf("\t\t%s\n",pNtHeaders32->OptionalHeader.Subsystem<=IMAGE_SUBSYSTEM_WINDOWS_BOOT_APPLICATION?subsystems[pNtHeaders32->OptionalHeader.Subsystem]:subsystems[0]);
         printf("\tDLL characterics\n");
@@ -469,15 +412,15 @@ int main(int argc, char* argv[])
         if (pNtHeaders32->OptionalHeader.DllCharacteristics&IMAGE_DLLCHARACTERISTICS_WDM_DRIVER) printf("\t\tIs WDM Driver\n");
         if (pNtHeaders32->OptionalHeader.DllCharacteristics&IMAGE_DLLCHARACTERISTICS_GUARD_CF) printf("\t\tGUARD_CF\n");
         if (pNtHeaders32->OptionalHeader.DllCharacteristics&IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE) printf("\t\tTerminal Server aware\n");
-        printf("\tReverse stack size        0x%08lX\n",pNtHeaders32->OptionalHeader.SizeOfStackReserve);
-        printf("\tCommite stack size        0x%08lX\n",pNtHeaders32->OptionalHeader.SizeOfStackCommit);
-        printf("\tReverse heap size         0x%08lX\n",pNtHeaders32->OptionalHeader.SizeOfHeapReserve);
-        printf("\tCommit heap size          0x%08lX\n",pNtHeaders32->OptionalHeader.SizeOfHeapReserve);
+        printf("\tReverse stack size        0x%08X\n",pNtHeaders32->OptionalHeader.SizeOfStackReserve);
+        printf("\tCommite stack size        0x%08X\n",pNtHeaders32->OptionalHeader.SizeOfStackCommit);
+        printf("\tReverse heap size         0x%08X\n",pNtHeaders32->OptionalHeader.SizeOfHeapReserve);
+        printf("\tCommit heap size          0x%08X\n",pNtHeaders32->OptionalHeader.SizeOfHeapReserve);
         printf("\n------Data Directories------\n");
         printf("\tName                    \tRVA        Size\n");
         for (int i=0; i < pNtHeaders32->OptionalHeader.NumberOfRvaAndSizes; i++)
         {
-            printf("\t\t%-23s 0x%08lx 0x%08lx\n",DataDirectoriesName[i],pNtHeaders32->OptionalHeader.DataDirectory[i].VirtualAddress,pNtHeaders32->OptionalHeader.DataDirectory[i].Size);
+            printf("\t\t%-23s 0x%08X 0x%08X\n",DataDirectoriesName[i],pNtHeaders32->OptionalHeader.DataDirectory[i].VirtualAddress,pNtHeaders32->OptionalHeader.DataDirectory[i].Size);
             if (i==IMAGE_DIRECTORY_ENTRY_IMPORT)
             {
                 importDataDir.VirtualAddress=pNtHeaders32->OptionalHeader.DataDirectory[i].VirtualAddress;
@@ -486,18 +429,18 @@ int main(int argc, char* argv[])
         }
         break;
     case 0x20B:
-        printf("\tImage Base                0x%016llX\n",pNtHeaders64->OptionalHeader.ImageBase);
-        printf("\tSection alignment         0x%08lX\n",pNtHeaders64->OptionalHeader.SectionAlignment);
-        printf("\tFile alignment            0x%08lX\n",pNtHeaders64->OptionalHeader.FileAlignment);
+        printf("\tImage Base                0x%016" PRIx64 "\n",pNtHeaders64->OptionalHeader.ImageBase);
+        printf("\tSection alignment         0x%08" PRIX32 "\n",pNtHeaders64->OptionalHeader.SectionAlignment);
+        printf("\tFile alignment            0x%08" PRIX32 "\n",pNtHeaders64->OptionalHeader.FileAlignment);
         printf("\tRequired OS Major Version %i\n",pNtHeaders64->OptionalHeader.MajorOperatingSystemVersion);
         printf("\tRequired OS Minor Version %i\n",pNtHeaders64->OptionalHeader.MinorOperatingSystemVersion);
         printf("\tImage Major Version       %i\n",pNtHeaders64->OptionalHeader.MajorImageVersion);
         printf("\tImage Minor Version       %i\n",pNtHeaders64->OptionalHeader.MinorImageVersion);
         printf("\tSubsystem Major Version   %i\n",pNtHeaders64->OptionalHeader.MajorSubsystemVersion);
         printf("\tSubsystem Minor Version   %i\n",pNtHeaders64->OptionalHeader.MajorSubsystemVersion);
-        printf("\tSize Of Image             %li\n",pNtHeaders64->OptionalHeader.SizeOfImage);
-        printf("\tSize Of Headers           %li\n",pNtHeaders64->OptionalHeader.SizeOfHeaders);
-        printf("\tChecksum                  0x%08lX\n",pNtHeaders64->OptionalHeader.CheckSum);
+        printf("\tSize Of Image             %u\n",pNtHeaders64->OptionalHeader.SizeOfImage);
+        printf("\tSize Of Headers           %u\n",pNtHeaders64->OptionalHeader.SizeOfHeaders);
+        printf("\tChecksum                  0x%08" PRIX32 "\n",pNtHeaders64->OptionalHeader.CheckSum);
         printf("\tSubsystem\n");
         printf("\t\t%s\n",pNtHeaders64->OptionalHeader.Subsystem<=IMAGE_SUBSYSTEM_WINDOWS_BOOT_APPLICATION?subsystems[pNtHeaders64->OptionalHeader.Subsystem]:subsystems[0]);
         printf("\tDLL characterics\n");
@@ -512,15 +455,15 @@ int main(int argc, char* argv[])
         if (pNtHeaders64->OptionalHeader.DllCharacteristics&IMAGE_DLLCHARACTERISTICS_WDM_DRIVER) printf("\t\tIs WDM Driver\n");
         if (pNtHeaders64->OptionalHeader.DllCharacteristics&IMAGE_DLLCHARACTERISTICS_GUARD_CF) printf("\t\tSupports GUARD_CF flag - do not compress!\n");
         if (pNtHeaders64->OptionalHeader.DllCharacteristics&IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE) printf("\t\tTerminal Server aware\n");
-        printf("\tReverse stack size        0x%016llX\n",pNtHeaders64->OptionalHeader.SizeOfStackReserve);
-        printf("\tCommite stack size        0x%016llX\n",pNtHeaders64->OptionalHeader.SizeOfStackCommit);
-        printf("\tReverse heap size         0x%016llX\n",pNtHeaders64->OptionalHeader.SizeOfHeapReserve);
-        printf("\tCommit heap size          0x%016llX\n",pNtHeaders64->OptionalHeader.SizeOfHeapReserve);
+        printf("\tReverse stack size        0x%016" PRIx64 "\n",pNtHeaders64->OptionalHeader.SizeOfStackReserve);
+        printf("\tCommite stack size        0x%016" PRIx64 "\n",pNtHeaders64->OptionalHeader.SizeOfStackCommit);
+        printf("\tReverse heap size         0x%016" PRIx64 "\n",pNtHeaders64->OptionalHeader.SizeOfHeapReserve);
+        printf("\tCommit heap size          0x%016" PRIx64 "\n",pNtHeaders64->OptionalHeader.SizeOfHeapReserve);
         printf("\n------Data Directories------\n");
         printf("\tName                    \tRVA        Size\n");
         for (DWORD i=0; i < pNtHeaders64->OptionalHeader.NumberOfRvaAndSizes; i++)
         {
-            printf("\t\t%-23s 0x%08lx 0x%08lx\n",DataDirectoriesName[i],pNtHeaders64->OptionalHeader.DataDirectory[i].VirtualAddress,pNtHeaders64->OptionalHeader.DataDirectory[i].Size);
+            printf("\t\t%-23s 0x%08" PRIX32 " 0x%08" PRIX32 "\n",DataDirectoriesName[i],pNtHeaders64->OptionalHeader.DataDirectory[i].VirtualAddress,pNtHeaders64->OptionalHeader.DataDirectory[i].Size);
             if (i==IMAGE_DIRECTORY_ENTRY_IMPORT)
             {
                 importDataDir.VirtualAddress=pNtHeaders64->OptionalHeader.DataDirectory[i].VirtualAddress;
@@ -529,18 +472,14 @@ int main(int argc, char* argv[])
         }
         break;
     case 0x107:
-        printf("\tBase of data             0x%08lX\n",ROMHdr->BaseOfData);
-        printf("\tBase of bss              0x%08lX\n",ROMHdr->BaseOfData);
-        printf("\tGPR mask                 0x%08lX\n",ROMHdr->GprMask);
-        printf("\tCPR mask                 0x%08lX 0x%08lX 0x%08lX 0x%08lX\n",ROMHdr->CprMask[0],ROMHdr->CprMask[1],ROMHdr->CprMask[2],ROMHdr->CprMask[3]);
-        printf("\tGP value                 0x%08lX\n",ROMHdr->GpValue);
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
-        FAIL("ROM not implemented");
+        printf("\tBase of data             0x%08" PRIX32 "\n",ROMHdr->BaseOfData);
+        printf("\tBase of bss              0x%08" PRIX32 "\n",ROMHdr->BaseOfData);
+        printf("\tGPR mask                 0x%08" PRIX32 "\n",ROMHdr->GprMask);
+        printf("\tCPR mask                 0x%08" PRIX32 " 0x%08" PRIX32 " 0x%08" PRIX32 " 0x%08" PRIX32 "\n",ROMHdr->CprMask[0],ROMHdr->CprMask[1],ROMHdr->CprMask[2],ROMHdr->CprMask[3]);
+        printf("\tGP value                 0x%08" PRIX32 "\n",ROMHdr->GpValue);
+        FAIL(D_NIMP,ERROR_NIMP);
     default:
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
-        FAIL("Invalid magic number (OptionalHeader)");
+        FAIL(D_OPHM,ERROR_OPHM);
     }
     //global parsing - not support ROM
     printf("------- SECTION HEADERS -------\n");
@@ -552,16 +491,16 @@ int main(int argc, char* argv[])
     {
         PIMAGE_SECTION_HEADER sectionHeader=(PIMAGE_SECTION_HEADER)sectionLocation;
         printf("\tName                           %s\n",sectionHeader->Name);
-        printf("\t\tPhysical address       0x%08lx\n", sectionHeader->Misc.PhysicalAddress);
-        printf("\t\tVirtual size           0x%08lx\n", sectionHeader->Misc.VirtualSize);
-        printf("\t\tVirtual address        0x%08lx\n", sectionHeader->VirtualAddress);
-        printf("\t\tSize of raw data       0x%08lx\n", sectionHeader->SizeOfRawData);
-        printf("\t\tPointer to raw data    0x%08lx\n", sectionHeader->PointerToRawData);
-        printf("\t\tPointer to relocations 0x%08lx\n", sectionHeader->PointerToRelocations);
-        printf("\t\tPointer to linenumbers 0x%08lx\n", sectionHeader->PointerToLinenumbers);
-        printf("\t\tNumber of relocations  0x%x\n", sectionHeader->NumberOfRelocations);
-        printf("\t\tNumber of linenumbers  0x%x\n", sectionHeader->NumberOfLinenumbers);
-        printf("\t\tCharacteristics        0x%08lx\n", sectionHeader->Characteristics);
+        printf("\t\tPhysical address       0x%08" PRIX32 "\n", sectionHeader->Misc.PhysicalAddress);
+        printf("\t\tVirtual size           0x%08" PRIX32 "\n", sectionHeader->Misc.VirtualSize);
+        printf("\t\tVirtual address        0x%08" PRIX32 "\n", sectionHeader->VirtualAddress);
+        printf("\t\tSize of raw data       0x%08" PRIX32 "\n", sectionHeader->SizeOfRawData);
+        printf("\t\tPointer to raw data    0x%08" PRIX32 "\n", sectionHeader->PointerToRawData);
+        printf("\t\tPointer to relocations 0x%08" PRIX32 "\n", sectionHeader->PointerToRelocations);
+        printf("\t\tPointer to linenumbers 0x%08" PRIX32 "\n", sectionHeader->PointerToLinenumbers);
+        printf("\t\tNumber of relocations  0x%" PRIx32 "\n", sectionHeader->NumberOfRelocations);
+        printf("\t\tNumber of linenumbers  0x%" PRIx32 "\n", sectionHeader->NumberOfLinenumbers);
+        printf("\t\tCharacteristics        0x%08" PRIX32 "\n", sectionHeader->Characteristics);
         if (sectionHeader->Characteristics & IMAGE_SCN_TYPE_NO_PAD) printf("\t\t\tNo padding (obsolete)\n");
         if (sectionHeader->Characteristics & IMAGE_SCN_CNT_CODE)
         {
@@ -575,17 +514,17 @@ int main(int argc, char* argv[])
         if (sectionHeader->Characteristics & IMAGE_SCN_LNK_INFO)
         {
             printf("\t\t\tContains linker info\n");
-            FAIL("Flag only for COFF");
+            FAIL(D_COFF,ERROR_COFF);
         }
         if (sectionHeader->Characteristics & IMAGE_SCN_LNK_REMOVE)
         {
             printf("\t\t\tWill become part of image\n");
-            FAIL("Flag only for COFF");
+            FAIL(D_COFF,ERROR_COFF);
         }
         if (sectionHeader->Characteristics & IMAGE_SCN_LNK_COMDAT)
         {
             printf("\t\t\tContains COMDAT data\n");
-            FAIL("Flag only for COFF");
+            FAIL(D_COFF,ERROR_COFF);
         }
         if (sectionHeader->Characteristics & IMAGE_SCN_GPREL) printf("\t\t\tContains data referenced through the global pointer\n");
         for (int i=1; i < 15; i++)
@@ -593,7 +532,7 @@ int main(int argc, char* argv[])
             if (sectionHeader->Characteristics & (1<<20*i))
             {
                 printf("\t\t\tAlign data on an %i-byte boundary\n",1<<i);
-                FAIL("Flag only for COFF");
+                FAIL(D_COFF,ERROR_COFF);
             }
         }
         if (sectionHeader->Characteristics & IMAGE_SCN_LNK_NRELOC_OVFL) printf("\t\t\tContains extended relocations\n");
@@ -612,8 +551,7 @@ int main(int argc, char* argv[])
         sectionLocation+=sizeof(IMAGE_SECTION_HEADER);
     }
     printf("------ DLL IMPORTS ------\n");
-    unordered_map<ULONGLONG,char*> addresses;
-    ULONG size;
+    unordered_map<ULONGLONG,BYTE*> addresses;
     if (importSection!=NULL)
     {
         // Calculate raw offset
@@ -640,7 +578,7 @@ int main(int argc, char* argv[])
                 {
                     if (thunkData32->u1.Ordinal & IMAGE_ORDINAL_FLAG32)
                     {
-                        printf("\t\t0x%016llX\t%x\t-\n", pNtHeaders32->OptionalHeader.ImageBase+importDescriptor->FirstThunk + ((DWORD_PTR)thunkData32-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA32)*4, (WORD)thunkData32->u1.Ordinal & 0xFFFF);
+                        printf("\t\t0x%08" PRIX32 "\t%" PRIx32 "\t-\n", pNtHeaders32->OptionalHeader.ImageBase+importDescriptor->FirstThunk + ((DWORD_PTR)thunkData32-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA32)*4, (WORD)thunkData32->u1.Ordinal & 0xFFFF);
                     }
                     else
                     {
@@ -648,9 +586,9 @@ int main(int argc, char* argv[])
 #ifdef UNDEC
                         char* decorated=(char*)malloc(256);
                         UnDecorateSymbolName(&importByName->Name[0],decorated,256,UNDNAME_COMPLETE);
-                        printf("\t\t0x%016llX\t-\t%s\n", importDescriptor->FirstThunk + ((DWORD_PTR)thunkData32-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA32)*4, decorated);
+                        printf("\t\t0x%08" PRIX32 "\t-\t%s\n", importDescriptor->FirstThunk + ((DWORD_PTR)thunkData32-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA32)*4, decorated);
 #else
-                        printf("\t\t0x%016llX\t-\t%s\n", importDescriptor->FirstThunk + ((DWORD_PTR)thunkData32-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA32)*4, importByName->Name);
+                        printf("\t\t0x%08" PRIX32 "\t-\t%s\n", importDescriptor->FirstThunk + ((DWORD_PTR)thunkData32-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA32)*4, importByName->Name);
 #endif
                         addresses[(ULONGLONG)(pNtHeaders32->OptionalHeader.ImageBase+importDescriptor->FirstThunk + ((DWORD_PTR)thunkData32-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA32)*4)]=&importByName->Name[0];
                     }
@@ -662,7 +600,7 @@ int main(int argc, char* argv[])
                 {
                     if (thunkData64->u1.Ordinal & IMAGE_ORDINAL_FLAG64)
                     {
-                        printf("\t\t0x%016llX\t%x\t-\n", pNtHeaders64->OptionalHeader.ImageBase+importDescriptor->FirstThunk + ((DWORD_PTR)thunkData64-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA64)*4, (WORD)thunkData64->u1.Ordinal & 0xFFFF);
+                        printf("\t\t0x%016" PRIX64 "\t%" PRIx16 "\t-\n", pNtHeaders64->OptionalHeader.ImageBase+importDescriptor->FirstThunk + ((DWORD_PTR)thunkData64-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA64)*4, (WORD)thunkData64->u1.Ordinal & 0xFFFF);
                     }
                     else
                     {
@@ -670,9 +608,9 @@ int main(int argc, char* argv[])
 #ifdef UNDEC
                         char* decorated=(char*)malloc(256);
                         UnDecorateSymbolName(&importByName->Name[0],decorated,256,UNDNAME_COMPLETE);
-                        printf("\t\t0x%016llX\t-\t%s\n", pNtHeaders64->OptionalHeader.ImageBase+importDescriptor->FirstThunk + ((DWORD_PTR)thunkData64-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA64)*4, decorated);
+                        printf("\t\t0x%016" PRIX64 "\t-\t%s\n", pNtHeaders64->OptionalHeader.ImageBase+importDescriptor->FirstThunk + ((DWORD_PTR)thunkData64-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA64)*4, decorated);
 #else
-                        printf("\t\t0x%016llX\t-\t%s\n", pNtHeaders64->OptionalHeader.ImageBase+importDescriptor->FirstThunk + ((DWORD_PTR)thunkData64-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA64)*4, importByName->Name);
+                        printf("\t\t0x%016" PRIX64 "\t-\t%s\n", pNtHeaders64->OptionalHeader.ImageBase+importDescriptor->FirstThunk + ((DWORD_PTR)thunkData64-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA64)*4, importByName->Name);
 #endif
                         addresses[pNtHeaders64->OptionalHeader.ImageBase+importDescriptor->FirstThunk + ((DWORD_PTR)thunkData64-rawOffset-(thunk - importSection->VirtualAddress))/sizeof(IMAGE_THUNK_DATA64)*4]=&importByName->Name[0];
                     }
@@ -681,48 +619,69 @@ int main(int argc, char* argv[])
             }
         }
     }
-    else printf("\tEmpty\n");
     printf("------ DLL EXPORTS ------\n");
+    ULONG size=0;
+    #ifdef _WIN32
+        hmod = LoadLibrary(argv[1]);
+    #else
+        #define hmod lpBaseAddress
+        BuildRvaToFileOffsetTable(lpBaseAddress, mappingTable);
+    #endif // _WIN32
     PIMAGE_EXPORT_DIRECTORY exports = (PIMAGE_EXPORT_DIRECTORY)ImageDirectoryEntryToData(hmod, TRUE, IMAGE_DIRECTORY_ENTRY_EXPORT, &size);
     if (exports)
     {
         // Calculate raw offset
-        printf("\tTime date stamp        %08lX\n",exports->TimeDateStamp);
-        printf("\tVersion                %i.%i\n",exports->MajorVersion,exports->MinorVersion);
-        printf("\tOrdinal base           %li\n",exports->Base);
-        printf("\tNumber of entries      %08li\n",exports->NumberOfFunctions);
-        printf("\tNumber of names        %08li\n",exports->NumberOfNames);
-        printf("\tAddress of functions   %08li\n",exports->AddressOfFunctions);
-        printf("\tAddress of names       %08li\n",exports->AddressOfNames);
-        printf("\tAddress of ordinals    %08li\n",exports->AddressOfNameOrdinals);
+        printf("\tTime date stamp        %08X\n", exports->TimeDateStamp);
+        printf("\tVersion                %i.%i\n", exports->MajorVersion, exports->MinorVersion);
+        printf("\tOrdinal base           %u\n", exports->Base);
+        printf("\tNumber of entries      %08u\n", exports->NumberOfFunctions);
+        printf("\tNumber of names        %08u\n", exports->NumberOfNames);
+        printf("\tAddress of functions   %08X\n", exports->AddressOfFunctions);
+        printf("\tAddress of names       %08X\n", exports->AddressOfNames);
+        printf("\tAddress of ordinals    %08X\n", exports->AddressOfNameOrdinals);
         printf("\tEntries\n");
-        printf("\tOrdinal RVA              Name\n");
+        printf("\tOrdinal\t\tRVA              Name\n");
         printf("\t----------------------------------------------\n");
+
         if (DWORD NumberOfFunctions = exports->NumberOfFunctions)
         {
             if (PLONG bits = (PLONG)LocalAlloc(LMEM_FIXED|LMEM_ZEROINIT, (NumberOfFunctions + 7) >> 3))
             {
                 ULONG i;
+                #ifdef _WIN32
                 PULONG AddressOfFunctions = (PULONG)RtlOffsetToPointer(hmod, exports->AddressOfFunctions);
+                #else
+                PULONG AddressOfFunctions = (PULONG)RtlOffsetToPointer(hmod, mappingTable[exports->AddressOfFunctions]);
+                #endif
                 if (DWORD NumberOfNames = exports->NumberOfNames)
                 {
+                    #ifdef _WIN32
                     PULONG AddressOfNames = (PULONG)RtlOffsetToPointer(hmod, exports->AddressOfNames);
                     PUSHORT AddressOfNameOrdinals = (PUSHORT)RtlOffsetToPointer(hmod, exports->AddressOfNameOrdinals);
+                    #else
+                    PULONG AddressOfNames = (PULONG)RtlOffsetToPointer(hmod, mappingTable[exports->AddressOfNames]);
+                    PUSHORT AddressOfNameOrdinals = (PUSHORT)RtlOffsetToPointer(hmod, mappingTable[exports->AddressOfNameOrdinals]);
+                    #endif
                     do
                     {
-                        PCSTR Name = (PCSTR)RtlOffsetToPointer(hmod, *AddressOfNames++);
-
+                        #ifdef _WIN32
+                            PCSTR Name = (PCSTR)RtlOffsetToPointer(hmod, *AddressOfNames++);
+                        #else
+                            PCSTR Name = (PCSTR)RtlOffsetToPointer(hmod, mappingTable[*AddressOfNames++]);
+                        #endif
                         _bittestandset(bits, i = *AddressOfNameOrdinals++);
-
-                        PVOID pv = (PVOID)RtlOffsetToPointer(hmod, AddressOfFunctions[i]);
-
+                        #ifdef _WIN32
+                            PVOID pv = (PVOID)RtlOffsetToPointer(hmod, AddressOfFunctions[i]);
+                        #else
+                            PVOID pv = (PVOID)RtlOffsetToPointer(hmod, mappingTable[AddressOfFunctions[i]]);
+                        #endif
                         if ((ULONG_PTR)pv - (ULONG_PTR)exports < size)
                         {
-                            DbgPrint("\t%08lX    %016llX %s -> %s\r\n", exports->Base+i, RtlPointerToOffset(hmod, pv), Name, (char*)pv);
+                            DbgPrint("\t%08X\t%016llX %s -> %s\r\n", exports->Base + i, RtlPointerToOffset(pv, hmod), Name, (char*)pv);
                         }
                         else
                         {
-                            DbgPrint("\t%08lX    %016llX %s\r\n", exports->Base+i, RtlPointerToOffset(hmod, pv), Name);
+                            DbgPrint("\t%08X\t%016llX %s\r\n", exports->Base + i, RtlPointerToOffset(pv, hmod), Name);
                         }
                     }
                     while (--NumberOfNames);
@@ -735,32 +694,37 @@ int main(int argc, char* argv[])
                     --AddressOfFunctions;
                     if (!_bittestandset(bits, --NumberOfFunctions))
                     {
-                        PVOID pv = (PVOID)RtlOffsetToPointer(hmod, *AddressOfFunctions);
-
+                        #ifdef _WIN32
+                            PVOID pv = (PVOID)RtlOffsetToPointer(hmod, *AddressOfFunctions);
+                        #else
+                            PVOID pv = (PVOID)RtlOffsetToPointer(hmod, mappingTable[*AddressOfFunctions]);
+                        #endif // _WIN32
                         if ((ULONG_PTR)pv - (ULONG_PTR)exports < size)
                         {
-                            DbgPrint("%08lX    %016llX #%lu -> %s\r\n", Base+i, RtlPointerToOffset(hmod, pv), Base + NumberOfFunctions, (char*)pv);
+                            DbgPrint("\t%08X\t%016llX #%lu -> %s\r\n", Base + i, RtlPointerToOffset(pv, hmod), Base + NumberOfFunctions, (char*)pv);
                         }
                         else
                         {
-                            DbgPrint("%08lX    %016llX #%lu\r\n",Base+ i, RtlPointerToOffset(hmod, pv), Base + NumberOfFunctions);
+                            DbgPrint("\t%08X\t%016llX #%lu\r\n", Base + i, RtlPointerToOffset(pv, hmod), Base + NumberOfFunctions);
                         }
                     }
                 }
                 while (NumberOfFunctions);
+
                 LocalFree(bits);
             }
         }
     }
-    else printf("\tEmpty\n");
+    else
+        printf("\tEmpty\n");
     printf("------ DEBUG INFOS ------\n");
     PIMAGE_DEBUG_DIRECTORY dbg = (PIMAGE_DEBUG_DIRECTORY)ImageDirectoryEntryToData(hmod, TRUE, IMAGE_DIRECTORY_ENTRY_DEBUG, &size);
     DWORD_PTR location;
     if (dbg)
     {
-        printf("\tTime date stamp        %016lX\n",dbg->TimeDateStamp);
+        printf("\tTime date stamp        %016llX\n",dbg->TimeDateStamp);
         printf("\tVersion                %i.%i\n",dbg->MajorVersion,dbg->MinorVersion);
-        printf("\tType                   %lX\n", dbg->Type);
+        printf("\tType                   %X\n", dbg->Type);
         switch(dbg->Type)
         {
         case 0:
@@ -790,9 +754,9 @@ int main(int argc, char* argv[])
         default:
             WARN("Unknown debug type",545);
         }
-        printf("\tSize of debugging info %lX\n",dbg->SizeOfData);
-        printf("\tAddress of raw data    %lX\n",dbg->AddressOfRawData);
-        printf("\tPointer to raw data    %lX\n",dbg->PointerToRawData);
+        printf("\tSize of debugging info %X\n",dbg->SizeOfData);
+        printf("\tAddress of raw data    %X\n",dbg->AddressOfRawData);
+        printf("\tPointer to raw data    %X\n",dbg->PointerToRawData);
 
         printf("------ SPECIFIC DEBUG INFORMATION ------\n");
         location=((DWORD_PTR)lpBaseAddress+dbg->PointerToRawData);
@@ -803,7 +767,7 @@ int main(int argc, char* argv[])
         while (location<=((DWORD_PTR)lpBaseAddress+dbg->PointerToRawData+dbg->SizeOfData))
         {
             printf("\t------------------------------------------------------------------------------\n");
-            printf("\tSignature                %lX\n",misc->DataType);
+            printf("\tSignature                %X\n",misc->DataType);
             switch(dbg->Type)
             {
             case 2:
@@ -828,9 +792,9 @@ int main(int argc, char* argv[])
                 CVNB=(NB10I*)location;
                 break;
             case 3:
-                printf("\tFunction address          %08lX\n",FPO->ulOffStart);
-                printf("\tFunction size             %08lX\n",FPO->cbProcSize);
-                printf("\tFunction local size       %08lX\n",FPO->cdwLocals*4);
+                printf("\tFunction address          %08X\n",FPO->ulOffStart);
+                printf("\tFunction size             %08X\n",FPO->cbProcSize);
+                printf("\tFunction local size       %08X\n",FPO->cdwLocals*4);
                 printf("\tFunction param size       %08X\n",FPO->cdwParams*4);
                 printf("\tFunction prolog size      %08X\n",FPO->cbProlog);
                 printf("\tNumber of registers saved %X\n",FPO->cbRegs);
@@ -841,7 +805,7 @@ int main(int argc, char* argv[])
                 FPO=(FPO_DATA*)location;
                 break;
             case 4:
-                printf("\tLength                    %08lX\n",misc->Length);
+                printf("\tLength                    %08X\n",misc->Length);
                 printf("\tData                      %02x\n",misc->Data[0]);
                 location+=sizeof(IMAGE_DEBUG_MISC);
                 misc=(PIMAGE_DEBUG_MISC)location;
@@ -854,7 +818,7 @@ int main(int argc, char* argv[])
     }
     else printf("\tEmpty\n");
     printf("------ EXCEPTION INFORMATION ------\n");
-    location=(DWORD_PTR)ImageDirectoryEntryToData(hmod, TRUE, IMAGE_DIRECTORY_ENTRY_EXPORT, &size);
+    location=(DWORD_PTR)ImageDirectoryEntryToData(hmod, TRUE, IMAGE_DIRECTORY_ENTRY_EXCEPTION, &size);
     if (location)
     {
         PIMAGE_FUNCTION_ENTRY entryx86=(PIMAGE_FUNCTION_ENTRY)location;
@@ -867,9 +831,9 @@ int main(int argc, char* argv[])
             printf("\t-----------------------------------------------------------------------------\n");
             while (RtlPointerToOffset(entryx86,location)<size)
             {
-                printf("\t%08lX\t\t",entryx86->StartingAddress);
-                printf("\t%08lX\t\t",entryx86->EndingAddress);
-                printf("\t%08lX\n",entryx86->EndOfPrologue);
+                printf("\t%08X\t\t",entryx86->StartingAddress);
+                printf("\t%08X\t\t",entryx86->EndingAddress);
+                printf("\t%08X\n",entryx86->EndOfPrologue);
                 entryx86++;
             }
             break;
@@ -878,9 +842,9 @@ int main(int argc, char* argv[])
             printf("\t--------------------------------------------------------------------------------\n");
             while (RtlPointerToOffset(entryx86,location)<size)
             {
-                printf("\t%08lX\t\t",entryx86->StartingAddress);
-                printf("\t%08lX\t\t",entryx86->EndingAddress);
-                printf("\t%08lX\n",entryx86->EndOfPrologue);
+                printf("\t%08X\t\t",entryx86->StartingAddress);
+                printf("\t%08X\t\t",entryx86->EndingAddress);
+                printf("\t%08X\n",entryx86->EndOfPrologue);
                 entryx86++;
             }
         case IMAGE_FILE_MACHINE_IA64:
@@ -890,11 +854,11 @@ int main(int argc, char* argv[])
             printf("\t------------------------------------------------------------------------------------------------------------------------------\n");
             while (RtlPointerToOffset(x86,location)<size)
             {
-                printf("\t%08lX\t\t",x86->BeginAddress);
-                printf("\t%08lX\t\t",x86->PrologLength);
-                printf("\t%08lX\t\t",x86->FunctionLength);
-                printf("\t%lX\t\t",x86->x86);
-                printf("\t%lX\n",x86->x86);
+                printf("\t%08X\t\t",x86->BeginAddress);
+                printf("\t%08X\t\t",x86->PrologLength);
+                printf("\t%08X\t\t",x86->FunctionLength);
+                printf("\t%X\t\t",x86->x86);
+                printf("\t%X\n",x86->x86);
                 x86++;
             }
         case IMAGE_FILE_MACHINE_POWERPC:
@@ -906,11 +870,11 @@ int main(int argc, char* argv[])
             printf("\t----------------------------------------------------------------------------------------------------\n");
             while (RtlPointerToOffset(entryx86MIPS,location)<size)
             {
-                printf("\t%08lX\t\t",entryx86MIPS->BeginAddress);
-                printf("\t%08lX\t\t\t",entryx86MIPS->EndAddress);
-                printf("\t%08lX\t\t",entryx86MIPS->ExceptionHandler);
-                printf("\t%08lX\t\t",entryx86MIPS->HandlerData);
-                printf("\t%08lX\n",entryx86MIPS->PrologEndAddress);
+                printf("\t%08X\t\t",entryx86MIPS->BeginAddress);
+                printf("\t%08X\t\t\t",entryx86MIPS->EndAddress);
+                printf("\t%08X\t\t",entryx86MIPS->ExceptionHandler);
+                printf("\t%08X\t\t",entryx86MIPS->HandlerData);
+                printf("\t%08X\n",entryx86MIPS->PrologEndAddress);
                 entryx86++;
             }
             break;
@@ -960,20 +924,15 @@ int main(int argc, char* argv[])
     EnumResourceNamesA(hmod,RT_VERSION,ENUMRESPROCCALLBACK,0L);
     printf("------ VXD (Win9x) ------\n");
     EnumResourceNamesA(hmod,RT_VXD,ENUMRESPROCCALLBACK,0L);
-    /*
-    printf("------ COFF SYMBOL TABLE ------\n");
-    if (pFileHeader->PointerToSymbolTable){
-        _COFF_SYMBOL
-    }
-    else printf("\tEmpty\n");*/
     printf("------ RELOCATIONS -------\n");
     if (PIMAGE_BASE_RELOCATION reloc=(PIMAGE_BASE_RELOCATION)ImageDirectoryEntryToData(hmod,TRUE,IMAGE_DIRECTORY_ENTRY_BASERELOC,&size))
     {
+        if ((DWORD_PTR)reloc+8+2*(reloc->SizeOfBlock-8)>=size)printf("\tEmpty\n");
         while ((DWORD_PTR)reloc+8+2*(reloc->SizeOfBlock-8)<size)
         {
             printf("\t----------------------------------\n");
-            printf("\t\tRVA of relocations        %08lX",reloc->VirtualAddress);
-            printf("\t\tEntries                   %08lX",reloc->SizeOfBlock);
+            printf("\t\tRVA of relocations        %08X",reloc->VirtualAddress);
+            printf("\t\tEntries                   %08X",reloc->SizeOfBlock);
             for (DWORD i=0; i<(reloc->SizeOfBlock-8)/2; i+=2)
             {
                 PRELOC preloc=(PRELOC)(i+reloc+8);
@@ -1069,279 +1028,33 @@ int main(int argc, char* argv[])
     // Initialize Capstone (choose the appropriate architecture and mode)
     if (cs_open(arch, mode, &handle) != CS_ERR_OK)
     {
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
-        FAIL("Error initializing Capstone.");
+        FAIL(D_CAPSTONE,ERROR_CAPSTONE);
     }
     cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);  // Enable detailed mode
+    cs_option(handle, CS_OPT_SKIPDATA, CS_OPT_OFF);  // Enable detailed mode
     // Disassemble instructions
     ULONGLONG ptr=(pNtHeaders32->OptionalHeader.Magic==0x10B?(ULONGLONG)pNtHeaders32->OptionalHeader.ImageBase:pNtHeaders64->OptionalHeader.ImageBase)+codeSection.VirtualAddress;
     count = cs_disasm(handle, (const uint8_t*)((DWORD_PTR)lpBaseAddress+codeSection.PointerToRawData), codeSection.SizeOfRawData, ptr, 0, &insn);
     if (count > 0)
     {
-        for (size_t i = 0; i < count; ++i)
-        {
-            if (insn[i].bytes[0]==0x90) continue; // padding
-            if (insn[i].bytes[0]==0x00&&insn[i].bytes[1]==0x00) continue; // padding
-            if (insn[i].bytes[0]==0xCC) continue; // never jumps to that part
-            char* endptr;
-            ULONGLONG addr;
-            char* str=(char*)malloc(21);
-            switch(insn[i].bytes[0])
-            {
-            case 0x70 ... 0x7f:
-                if (has_rip_relative_addressing(&insn[i],handle))
-                {
-                    addr=parse_rip_relative_addressing(&insn[i],handle);
-                    addr += insn[i].address;
-                }
-                else
-                {
-                    // Attempt to convert the string to an integer directly
-                    addr = strtoull(insn[i].op_str, &endptr, 16);
-                    if (*endptr != '\0')
-                    {
-                        // If direct conversion fails, try extracting hex value from the string
-                        char* start_bracket = strchr(insn[i].op_str, '[');
-                        if (start_bracket)
-                        {
-                            char* end_bracket = strchr(start_bracket, ']');
-                            if (end_bracket)
-                            {
-                                *end_bracket = '\0'; // Null-terminate the substring
-                                char* hex_value = start_bracket + 1;
-                                addr = strtoull(hex_value, NULL, 16);
-                            }
-                        }
-                    }
-                }
-                if (addresses.find(addr)==addresses.end())
-                {
-                    sprintf(str,"loc_%llx",addr);
-                    addresses[addr]=str;
-                }
-            case 0xe0 ... 0xe7:
-            case 0xe9 ... 0xeb:
-                break;
-            case 0xE8:
-                if (has_rip_relative_addressing(&insn[i],handle))
-                {
-                    addr=parse_rip_relative_addressing(&insn[i],handle);
-                    addr += insn[i].address;
-                }
-                else
-                {
-                    // Attempt to convert the string to an integer directly
-                    addr = strtoull(insn[i].op_str, &endptr, 16);
-                    if (*endptr != '\0')
-                    {
-                        // If direct conversion fails, try extracting hex value from the string
-                        char* start_bracket = strchr(insn[i].op_str, '[');
-                        if (start_bracket)
-                        {
-                            char* end_bracket = strchr(start_bracket, ']');
-                            if (end_bracket)
-                            {
-                                *end_bracket = '\0'; // Null-terminate the substring
-                                char* hex_value = start_bracket + 1;
-                                addr = strtoull(hex_value, NULL, 16);
-                            }
-                        }
-                    }
-                }
-                if (addresses.find(addr)==addresses.end())
-                {
-                    sprintf(str,"sub_%llx",addr);
-                    addresses[addr]=str;
-                }
-            case 0x9a:
-                break;
-            default:
-                break;
-            }
-            switch (insn[i].bytes[0]<<8|insn[i].bytes[1])
-            {
-            case 0x0f80 ... 0x0f8f:
-                if (has_rip_relative_addressing(&insn[i],handle))
-                {
-                    addr=parse_rip_relative_addressing(&insn[i],handle);
-                    addr += insn[i].address;
-                }
-                else
-                {
-                    // Attempt to convert the string to an integer directly
-                    addr = strtoull(insn[i].op_str, &endptr, 16);
-                    if (*endptr != '\0')
-                    {
-                        // If direct conversion fails, try extracting hex value from the string
-                        char* start_bracket = strchr(insn[i].op_str, '[');
-                        if (start_bracket)
-                        {
-                            char* end_bracket = strchr(start_bracket, ']');
-                            if (end_bracket)
-                            {
-                                *end_bracket = '\0'; // Null-terminate the substring
-                                char* hex_value = start_bracket + 1;
-                                addr = strtoull(hex_value, NULL, 16);
-                            }
-                        }
-                    }
-                }
-                if (addresses.find(addr)==addresses.end())
-                {
-                    sprintf(str,"loc_%llx",addr);
-                    addresses[addr]=str;
-                }
-            case 0xff04 ... 0xff05:
-                break;
-            case 0xff02 ... 0xff03:
-                if (has_rip_relative_addressing(&insn[i],handle))
-                {
-                    addr=parse_rip_relative_addressing(&insn[i],handle);
-                    addr += insn[i].address;
-                }
-                else
-                {
-                    // Attempt to convert the string to an integer directly
-                    addr = strtoull(insn[i].op_str, &endptr, 16);
-                    if (*endptr != '\0')
-                    {
-                        // If direct conversion fails, try extracting hex value from the string
-                        char* start_bracket = strchr(insn[i].op_str, '[');
-                        if (start_bracket)
-                        {
-                            char* end_bracket = strchr(start_bracket, ']');
-                            if (end_bracket)
-                            {
-                                *end_bracket = '\0'; // Null-terminate the substring
-                                char* hex_value = start_bracket + 1;
-                                addr = strtoull(hex_value, NULL, 16);
-                            }
-                        }
-                    }
-                }
-                if (addresses.find(addr)==addresses.end())
-                {
-                    sprintf(str,"sub_%llx",addr);
-                    addresses[addr]=str;
-                }
-                break;
-            default:
-                break;
-            }
-            if (has_rip_relative_addressing(&insn[i],handle))
-            {
-                addr=parse_rip_relative_addressing(&insn[i],handle);
-                sprintf(str,"sub_%llx",addr);
-                addr += insn[i].address;
-                addresses[addr]=str;
-            }
-        }
-        for (size_t i = 0; i < count; ++i)
-        {
-            if (insn[i].bytes[0] == 0x90) {
-                continue;
-            }
-
-            if (addresses.find(insn[i].address) != addresses.end()) {
-                printf("%s:\n", addresses[insn[i].address]);
-            }
-
-            printf("0x%08llx: ", insn[i].address);
-            for (size_t j = 0; j < insn[i].size; ++j) {
-                printf("%02x ", insn[i].bytes[j]);
-            }
-            for (size_t j = 0; j < 15 - insn[i].size; ++j) {
-                printf("   ");
-            }
-            printf("%s ", insn[i].mnemonic);
-
-            char* endptr;
-            uint64_t addr;
-            switch (insn[i].bytes[0]) {
-                case 0x70 ... 0x7f:
-                    if (has_rip_relative_addressing(&insn[i], handle)) {
-                        addr = parse_rip_relative_addressing(&insn[i], handle);
-                    } else {
-                        addr = strtoull(insn[i].op_str, &endptr, 16);
-                        if (*endptr != '\0') {
-                            char* start_bracket = strchr(insn[i].op_str, '[');
-                            if (start_bracket) {
-                                char* end_bracket = strchr(start_bracket, ']');
-                                if (end_bracket) {
-                                    *end_bracket = '\0';
-                                    addr = strtoull(start_bracket + 1, NULL, 16);
-                                }
-                            }
-                        }
-                    }
-                    printf("%s\n", addresses[addr]);
-                case 0xe0 ... 0xeb:
-                case 0x9A:
-                    // Handle far calls if needed
-                    break;
-                case 0xff:
-                    switch (insn[i].bytes[1]) {
-                        case 0x02 ... 0x05:
-                            if (has_rip_relative_addressing(&insn[i], handle)) {
-                                addr = parse_rip_relative_addressing(&insn[i], handle);
-                            } else {
-                                addr = strtoull(insn[i].op_str, &endptr, 16);
-                                if (*endptr != '\0') {
-                                    char* start_bracket = strchr(insn[i].op_str, '[');
-                                    if (start_bracket) {
-                                        char* end_bracket = strchr(start_bracket, ']');
-                                        if (end_bracket) {
-                                            *end_bracket = '\0';
-                                            addr = strtoull(start_bracket + 1, NULL, 16);
-                                        }
-                                    }
-                                }
-                            }
-                            printf("%s\n", addresses[addr]);
-                            break;
-                        default:
-                            printf("%s\n", insn[i].op_str);
-                            break;
-                    }
-                    break;
-                case 0x0f:
-                    switch (insn[i].bytes[1]) {
-                        case 0x80 ... 0x8f:
-                            if (has_rip_relative_addressing(&insn[i], handle)) {
-                                addr = parse_rip_relative_addressing(&insn[i], handle);
-                            } else {
-                                addr = strtoull(insn[i].op_str, &endptr, 16);
-                                if (*endptr != '\0') {
-                                    char* start_bracket = strchr(insn[i].op_str, '[');
-                                    if (start_bracket) {
-                                        char* end_bracket = strchr(start_bracket, ']');
-                                        if (end_bracket) {
-                                            *end_bracket = '\0';
-                                            addr = strtoull(start_bracket + 1, NULL, 16);
-                                        }
-                                    }
-                                }
-                            }
-                            printf("%s\n", addresses[addr]);
-                            break;
-                    }
-                default:
-                    printf("%s\n", insn[i].op_str);
-                    break;
-            }
-        }
+        processX86Disassembly(insn, count, addresses);
         cs_free(insn, count);
     }
     else
     {
-        CloseHandle(hMapping);
-        CloseHandle(hFile);
-        FAIL("Disassembly error");
+        FAIL(D_DISASM,ERROR_DISASM);
     }
     cs_close(&handle);
-    FreeLibrary(hmod);
-    CloseHandle(hMapping);
-    CloseHandle(hFile);
+    #ifdef _WIN32
+        FreeLibrary(hmod);
+    	CloseHandle(hMapping);
+    	CloseHandle(hFile);
+    #else
+    	// Unmap the file and close the file descriptor
+    	if (munmap(lpBaseAddress, sb.st_size) == -1) {
+        	FAIL(D_UMP,ERROR_UMAP);
+    	}
+    	close(fd);
+    #endif
     return 0;
 }

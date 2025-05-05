@@ -1,6 +1,6 @@
 #ifndef DEBUG_H_INCLUDED
 #define DEBUG_H_INCLUDED
-#include <windows.h>
+#include "types.h"
 typedef struct _FUNCTION_ENTRY_MIPS{
     DWORD BeginAddress;
     DWORD EndAddress;
@@ -20,14 +20,6 @@ typedef struct _FUNCTION_ENTRY_ARM_PP_SH34{
 //
 // Thread Local Storage (TLS)
 //
-typedef
-VOID
-(NTAPI *PIMAGE_TLS_CALLBACK) (
-    PVOID DllHandle,
-    ULONG Reason,
-    PVOID Reserved
-);
-
 typedef struct _RELOC{
     WORD Type:4;
     WORD Offset:12;

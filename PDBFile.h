@@ -1,4 +1,5 @@
-#include <windows.h>
+#pragma once
+#include "types.h"
 enum CVSIG
 {
     SIG02 = 0,                         // NB02 signature
@@ -23,19 +24,19 @@ typedef ULONG   AGE;        // no. of times this instance has been updated
 #define SIG011 0x30324E42
 #define RSDS   0x53445352
 typedef void *          PV;
-    struct NB10I                       // NB10 debug info
-    {
-        DWORD   dwSig;                 // NB10
-        DWORD   dwOffset;              // offset, always 0
-        SIG     sig;
-        AGE     age;
-        char    szPdb[_MAX_PATH];
-    };
+struct NB10I                       // NB10 debug info
+{
+    DWORD   dwSig;                 // NB10
+    DWORD   dwOffset;              // offset, always 0
+    SIG     sig;
+    AGE     age;
+    char    szPdb[_MAX_PATH];
+};
 
-    struct RSDSI                       // RSDS debug info
-    {
-        DWORD   dwSig;                 // RSDS
-        GUID    guidSig;
-        DWORD   age;
-        char    szPdb[_MAX_PATH * 3];
-    };
+struct RSDSI                       // RSDS debug info
+{
+    DWORD   dwSig;                 // RSDS
+    GUID    guidSig;
+    DWORD   age;
+    char    szPdb[_MAX_PATH * 3];
+};
