@@ -5,7 +5,7 @@ CXX = g++
 CXXFLAGS = -std=c++11 -Wall -g
 
 # Source files
-SRCS = main.cpp disasm_analyzer.cpp
+SRCS = main.cpp
 # Executable name
 TARGET = pedumper
 
