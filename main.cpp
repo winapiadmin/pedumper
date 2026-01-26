@@ -1,5 +1,4 @@
 #include "types.h"
-#include "disasm_analyzer.h"
 #include <inttypes.h>
 using namespace std;
 
@@ -968,83 +967,6 @@ int main(int argc, char* argv[]) {
         }
     }
     else printf("\tEmpty\n");
-    printf("------ DISASSEMBLY ------\n");
-    csh handle;
-    cs_insn* insn;
-    size_t count;
-    cs_mode mode;
-    cs_arch arch;
-    switch(pFileHeader->Machine)
-    {
-    case IMAGE_FILE_MACHINE_I386:
-        arch=CS_ARCH_X86;
-        mode=CS_MODE_32;
-        break;
-    case IMAGE_FILE_MACHINE_AMD64:
-        arch=CS_ARCH_X86;
-        mode=CS_MODE_64;
-        break;
-    case IMAGE_FILE_MACHINE_ARM:
-        arch=CS_ARCH_ARM;
-        mode=CS_MODE_ARM;
-        break;
-    case IMAGE_FILE_MACHINE_ARM64:
-        arch=CS_ARCH_ARM64;
-        mode=CS_MODE_ARM;
-        break;
-    case IMAGE_FILE_MACHINE_MIPS16:
-        arch=CS_ARCH_MIPS;
-        mode=CS_MODE_MIPS32;
-        break;
-    case IMAGE_FILE_MACHINE_MIPSFPU:
-        arch=CS_ARCH_MIPS;
-        mode=CS_MODE_MIPS64;
-        break;
-    case IMAGE_FILE_MACHINE_SH4:
-        arch=CS_ARCH_SH;
-        mode=CS_MODE_SH4;
-        break;
-    case IMAGE_FILE_MACHINE_SH3:
-        arch=CS_ARCH_SH;
-        mode=CS_MODE_SH3;
-        break;
-    case IMAGE_FILE_MACHINE_SH3DSP:
-        arch=CS_ARCH_SH;
-        mode=CS_MODE_SHDSP;
-        break;
-    case IMAGE_FILE_MACHINE_THUMB:
-        arch=CS_ARCH_ARM;
-        mode=CS_MODE_THUMB;
-        break;
-    case IMAGE_FILE_MACHINE_POWERPC:
-        arch=CS_ARCH_PPC;
-        mode=CS_MODE_BIG_ENDIAN;
-        break;
-    default:
-        arch=CS_ARCH_ALL;
-        mode=CS_MODE_LITTLE_ENDIAN;
-        break;
-    }
-    // Initialize Capstone (choose the appropriate architecture and mode)
-    if (cs_open(arch, mode, &handle) != CS_ERR_OK)
-    {
-        FAIL(D_CAPSTONE,ERROR_CAPSTONE);
-    }
-    cs_option(handle, CS_OPT_DETAIL, CS_OPT_ON);  // Enable detailed mode
-    cs_option(handle, CS_OPT_SKIPDATA, CS_OPT_OFF);  // Enable detailed mode
-    // Disassemble instructions
-    ULONGLONG ptr=(pNtHeaders32->OptionalHeader.Magic==0x10B?(ULONGLONG)pNtHeaders32->OptionalHeader.ImageBase:pNtHeaders64->OptionalHeader.ImageBase)+codeSection.VirtualAddress;
-    count = cs_disasm(handle, (const uint8_t*)((DWORD_PTR)lpBaseAddress+codeSection.PointerToRawData), codeSection.SizeOfRawData, ptr, 0, &insn);
-    if (count > 0)
-    {
-        processX86Disassembly(insn, count, addresses);
-        cs_free(insn, count);
-    }
-    else
-    {
-        FAIL(D_DISASM,ERROR_DISASM);
-    }
-    cs_close(&handle);
     #ifdef _WIN32
         FreeLibrary(hmod);
     	CloseHandle(hMapping);
